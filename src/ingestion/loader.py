@@ -10,6 +10,3 @@ def load_documents():
             "text": text
         })
     return docs
-
-docs = load_documents()
-print(len(docs), docs[0]["id"])
