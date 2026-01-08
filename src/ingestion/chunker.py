@@ -1,47 +1,40 @@
-def chunk_text(text, chunk_size=300, overlap=50):
+def chunk_file_by_separator(file_path, separator="---"):
     """
-    Break a document into chunks with optional overlap.
+    Read a text file and split it into chunks based on a separator.
 
     Args:
-        text (str): The raw text of the document.
-        chunk_size (int): Number of words per chunk.
-        overlap (int): Number of words overlapping between chunks.
+        file_path (str or Path)
+        separator (str): delimiter that separates logical chunks
 
     Returns:
-        List[str]: List of chunk texts.
+        List[str]: list of chunk texts
     """
-    words = text.split()
-    chunks = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end])
-        chunks.append(chunk)
-        start += chunk_size - overlap  
-
-    return chunks
+    raw_chunks = [c.strip() for c in content.split(separator) if c.strip()]
+    return raw_chunks
 
 
-def chunk_documents(documents, chunk_size=300, overlap=50):
+def chunk_documents_from_files(file_paths, separator="---"):
     """
-    Apply chunking to a list of documents.
+    Take multiple files, split them into chunks by separator,
+    and assign doc_id + chunk_id.
 
     Args:
-        documents (List[dict]): Each dict has 'id' and 'text'.
-        chunk_size (int)
-        overlap (int)
+        file_paths (List[str or Path])
+        separator (str)
 
     Returns:
-        List[dict]: Each dict has 'doc_id', 'chunk_id', 'text'
+        List[dict]: each dict has 'doc_id', 'chunk_id', 'text'
     """
     all_chunks = []
-    for doc in documents:
-        chunks = chunk_text(doc["text"], chunk_size, overlap)
-        for i, chunk in enumerate(chunks):
+    for file_index, path in enumerate(file_paths):
+        chunks = chunk_file_by_separator(path, separator)
+        for i, c in enumerate(chunks):
             all_chunks.append({
-                "doc_id": doc["id"],
+                "doc_id": f"doc_{file_index}",
                 "chunk_id": i,
-                "text": chunk
+                "text": c
             })
     return all_chunks

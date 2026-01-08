@@ -1,48 +1,60 @@
 from datasets import load_dataset
+from itertools import islice
 from pathlib import Path
 import shutil
 
-# Directory to save articles
 RAW_DIR = Path("data/raw")
 
-# Clear the directory if it exists
-if RAW_DIR.exists() and RAW_DIR.is_dir():
+if RAW_DIR.exists():
     shutil.rmtree(RAW_DIR)
-
-# Recreate the empty directory
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-# Load the dog-specific dataset
-dataset = load_dataset("SparkleDark/Everything_about_dogs", split="train")
+PERCENTAGE = 0.05
+TOTAL_ROWS = 20000
+MAX_ROWS = int(TOTAL_ROWS * PERCENTAGE)
 
-# Settings
-articles_per_file = 300
+dataset = load_dataset(
+    "camel-ai/physics",
+    split="train",
+    streaming=True
+)
+
+dataset = islice(dataset, MAX_ROWS)
+
+chunks_per_file = 300
 file_index = 0
-article_count = 0
-current_file_text = []
+chunk_count = 0
+current_file_chunks = []
 
 for row in dataset:
-    text = row.get("text", "").strip()  # get text and remove leading/trailing spaces
-    if not text:  # skip empty articles
+    content = row.get("message_2", "").strip()
+    if not content:
         continue
 
-    current_file_text.append(text)
-    article_count += 1
+    topic = row.get("topic", "")
+    sub_topic = row.get("sub_topic", "")
 
-    # Write to file every `articles_per_file` articles
-    if article_count % articles_per_file == 0:
-        file_path = RAW_DIR / f"wiki_dogs_{file_index}.txt"
+    chunk_text = (
+        f"Topic: {topic}\n"
+        f"Subtopic: {sub_topic}\n\n"
+        f"{content}"
+    )
+
+    current_file_chunks.append(chunk_text)
+    chunk_count += 1
+
+    if chunk_count % chunks_per_file == 0:
+        file_path = RAW_DIR / f"physics_chunks_{file_index}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(current_file_text))  # separate articles with 2 newlines
-        print(f"Saved {len(current_file_text)} articles to {file_path}")
+            f.write("\n\n---\n\n".join(current_file_chunks))
+
         file_index += 1
-        current_file_text = []  # reset for next file
+        current_file_chunks = []
 
-# Write any remaining articles
-if current_file_text:
-    file_path = RAW_DIR / f"wiki_dogs_{file_index}.txt"
+# flush
+if current_file_chunks:
+    file_path = RAW_DIR / f"physics_chunks_{file_index}.txt"
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write("\n\n".join(current_file_text))
-    print(f"Saved {len(current_file_text)} articles to {file_path}")
+        f.write("\n\n---\n\n".join(current_file_chunks))
 
-print(f"Processed {article_count} dog-related articles in total.")
+print(f"Processed {chunk_count} rows (streamed).")

@@ -1,14 +1,13 @@
-from src.ingestion.loader import load_documents
-from src.ingestion.chunker import chunk_documents
+from pathlib import Path
+from src.ingestion.chunker import chunk_documents_from_files
 from src.ingestion.embedder import embed_chunks
 from src.retrieval.faiss_index import build_faiss_index, save_chunk_metadata
-from src.config import CHUNK_SIZE, CHUNK_OVERLAP
 
-docs = load_documents()
-print(f"Loaded {len(docs)} documents")
+RAW_DIR = Path("data/raw")
+file_paths = list(RAW_DIR.glob("*.txt"))  # get all txt files
 
-chunks = chunk_documents(docs, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
-print(f"Created {len(chunks)} chunks")
+chunks = chunk_documents_from_files(file_paths, separator="---")
+print(f"Created {len(chunks)} chunks from {len(file_paths)} files")
 
 embeddings, chunks_with_meta = embed_chunks(chunks)
 print(f"Created embeddings of shape {embeddings.shape}")
@@ -19,7 +18,7 @@ for c, emb in zip(chunks_with_meta, embeddings):
         "doc_id": c["doc_id"],
         "chunk_id": c["chunk_id"],
         "text": c["text"],
-        "embedding": emb 
+        "embedding": emb
     })
 
 index = build_faiss_index(embeddings)
