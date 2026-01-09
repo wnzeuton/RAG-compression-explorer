@@ -152,11 +152,16 @@ ratio = st.slider(
     step=0.05
 )
 
-top_k = st.slider(
-    "Number of retrieved chunks",
-    min_value=0,
-    max_value=20,
-    value=10
+# =====================================================
+# Timeline filter slider
+# =====================================================
+cutoff_year = st.slider(
+    "Maximum year of context",
+    min_value=2030,
+    max_value=2050,
+    value=2050,
+    step=1,
+    help="Limit the RAG context to chunks with year ≤ this value"
 )
 
 # =====================================================
@@ -195,11 +200,14 @@ if st.button("Generate"):
         st.info("Running retrieval + compression + LLM...")
 
         # -------------------------
-        # Retrieval
+        # Retrieval (fixed top_k = 10)
         # -------------------------
-        chunks = []
-        if top_k > 0:
-            chunks = retriever.query(query)[:top_k]
+        chunks = retriever.query(query)[:10]
+
+        # -------------------------
+        # Filter by year
+        # -------------------------
+        chunks = [c for c in chunks if c.get("year", 2050) <= cutoff_year]
 
         # -------------------------
         # Compression
