@@ -89,7 +89,7 @@ In 1960, Robert G. Chambers performed the first experimental observation of the 
 
 In summary, the Aharonov-Bohm effect demonstrates the importance of the electromagnetic potential in quantum mechanics and can be experimentally verified using a modified double-slit interference setup. The shift in the interference pattern as a function of the magnetic field inside a solenoid provides evidence for the AB effect.
 
----
+---   
 
 Topic: 
 Subtopic: The Aharonov-Bohm effect

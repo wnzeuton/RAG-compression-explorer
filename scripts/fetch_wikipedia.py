@@ -31,7 +31,7 @@ for row in dataset:
     if not content:
         continue
 
-    topic = row.get("topic", "")
+    topic = row.get("topic;", "")
     sub_topic = row.get("sub_topic", "")
 
     chunk_text = (

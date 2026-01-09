@@ -1,16 +1,33 @@
 import streamlit as st
 import torch
+import time
+
 from src.retrieval.retriever import Retriever
 from src.compression.soft import SoftCompressor
 from src.compression.hard import HardCompressor
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import time
 
 # =====================================================
 # App setup
 # =====================================================
 st.set_page_config(page_title="Context Compression Demo")
 st.title("Context Compression Demo")
+
+# =====================================================
+# RAG system prompts
+# =====================================================
+TIGHT_RAG_PROMPT = (
+    "You are an assistant that answers questions ONLY using the provided context. "
+    "Do not use prior knowledge. "
+    "If the answer is not explicitly stated in the context, say 'I don't know.' "
+    "Do not mention or reference the context."
+)
+
+LOOSE_RAG_PROMPT = (
+    "You are a helpful assistant. Use the provided context as supporting information "
+    "when relevant, but you may rely on your general knowledge if needed. "
+    "Do not explicitly mention the context unless necessary."
+)
 
 # =====================================================
 # Initialize modules
@@ -20,7 +37,7 @@ soft_compressor = SoftCompressor()
 hard_compressor = HardCompressor()
 
 # =====================================================
-# Load Qwen3-0.6B model
+# Load Qwen3-0.6B
 # =====================================================
 @st.cache_resource
 def load_qwen3():
@@ -36,35 +53,34 @@ def load_qwen3():
 tokenizer, model = load_qwen3()
 
 # =====================================================
-# Query function using chat template
+# LLM query function
 # =====================================================
-def query_qwen3(context, question):
-    messages = [
-        {
-            "role": "system",
-            "content": (
-            "You are an assistant that answers questions ONLY using the provided context. "
-            "Do not use prior knowledge. "
-            "If there is no context, or if the context does not contain the answer, say 'I don't know.' "
-            "Do not mention or reference the context."
-            )
-        },
-        {
-            "role": "user",
-            "content": (
+def query_qwen3(context, question, system_prompt, rag_mode):
+    if rag_mode.startswith("Tight"):
+        user_content = (
             f"Context:\n{context}\n\n"
             f"Question:\n{question}\n\n"
+            "Answer using ONLY the context:"
+        )
+    else:
+        user_content = (
+            f"Here is some relevant information:\n{context}\n\n"
+            f"Question:\n{question}\n\n"
             "Answer:"
-            )
-        }
+        )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content}
     ]
 
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
         add_generation_prompt=True,
-        enable_thinking=False  
+        enable_thinking=False
     )
+
     model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
     generated_ids = model.generate(
@@ -73,15 +89,18 @@ def query_qwen3(context, question):
         do_sample=False
     )
 
-    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
-    content = tokenizer.decode(output_ids, skip_special_tokens=True).strip("\n")
-
-    return content
+    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
+    return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
 
 # =====================================================
 # UI Controls
 # =====================================================
 query = st.text_input("Enter your query")
+
+rag_mode = st.selectbox(
+    "RAG Mode",
+    ["Tight (context-only)", "Loose (context-guided)"]
+)
 
 compression_type = st.selectbox(
     "Compression method",
@@ -103,6 +122,29 @@ top_k = st.slider(
     value=10
 )
 
+# =====================================================
+# Advanced settings
+# =====================================================
+with st.expander("Advanced settings"):
+    override_prompt = st.checkbox("Override system prompt")
+
+    system_prompt = (
+        TIGHT_RAG_PROMPT
+        if rag_mode.startswith("Tight")
+        else LOOSE_RAG_PROMPT
+    )
+
+    custom_prompt = st.text_area(
+        "System prompt",
+        value=system_prompt,
+        height=150,
+        disabled=not override_prompt
+    )
+
+    if override_prompt:
+        system_prompt = custom_prompt
+        st.warning("⚠️ Custom system prompt active")
+
 st.markdown("---")
 
 # =====================================================
@@ -118,18 +160,13 @@ if st.button("Generate"):
         # -------------------------
         # Retrieval
         # -------------------------
-        chunks = retriever.query(query)[:top_k]
-
-        # =====================================================
-        # Retrieval
-        # =====================================================
         chunks = []
-        if top_k > 0:  # Only retrieve if user requests chunks
+        if top_k > 0:
             chunks = retriever.query(query)[:top_k]
 
-        # =====================================================
+        # -------------------------
         # Compression
-        # =====================================================
+        # -------------------------
         compressed = []
         if chunks:
             if compression_type.startswith("Soft"):
@@ -137,33 +174,44 @@ if st.button("Generate"):
             else:
                 compressed = hard_compressor.compress(chunks, ratio)
 
-        # =====================================================
-        # Build context for LLM
-        # =====================================================
-        context = "\n".join([c["text"] for c in compressed]) if compressed else ""
-        answer = query_qwen3(context, query)
+        # -------------------------
+        # Build context
+        # -------------------------
+        context = "\n".join(c["text"] for c in compressed) if compressed else ""
+
+        # -------------------------
+        # LLM generation
+        # -------------------------
+        answer = query_qwen3(
+            context=context,
+            question=query,
+            system_prompt=system_prompt,
+            rag_mode=rag_mode
+        )
 
         elapsed = round(time.time() - start, 2)
         st.success(f"Done in {elapsed}s")
 
         # =====================================================
-        # Show LLM output
+        # Output
         # =====================================================
         st.subheader("LLM Output")
         st.write(answer)
 
         # =====================================================
-        # Show top relevant chunks
+        # Show retrieved chunks
         # =====================================================
-        st.subheader("Top Relevant Chunks")
-        for i, chunk in enumerate(chunks, start=1):
-            with st.expander(f"Chunk #{i}"):
-                st.write(chunk['text'])
+        if chunks:
+            st.subheader("Top Relevant Chunks")
+            for i, chunk in enumerate(chunks, start=1):
+                with st.expander(f"Chunk #{i}"):
+                    st.write(chunk["text"])
 
         # =====================================================
         # Show compressed context
         # =====================================================
-        with st.expander("Compressed Context Sent to LLM"):
-            for i, c in enumerate(compressed, start=1):
-                st.markdown(f"{c['text']}")
-                st.markdown("---")
+        if compressed:
+            with st.expander("Compressed Context Sent to LLM"):
+                for c in compressed:
+                    st.markdown(c["text"])
+                    st.markdown("---")
