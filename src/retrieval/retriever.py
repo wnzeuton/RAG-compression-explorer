@@ -1,5 +1,6 @@
 import numpy as np
 import faiss
+import torch
 from sentence_transformers import SentenceTransformer
 from src.retrieval.faiss_index import load_chunk_metadata
 from src.config import EMBEDDING_MODEL, TOP_K
