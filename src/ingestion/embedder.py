@@ -1,20 +1,17 @@
+import numpy as np
 from sentence_transformers import SentenceTransformer
-from src.config import EMBEDDING_MODEL
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def embed_chunks(chunks):
     """
-    Compute embeddings for a list of chunks.
-
-    Args:
-        chunks (List[dict]): Each dict has 'doc_id', 'chunk_id', 'text'
+    Embed year-based chunks.
 
     Returns:
-        embeddings (np.ndarray): Array of shape (num_chunks, embedding_dim)
-        chunk_meta (List[dict]): Same order as embeddings
+        embeddings: np.ndarray
+        chunks_with_meta: List[dict]
     """
-    model = SentenceTransformer(EMBEDDING_MODEL)
     texts = [c["text"] for c in chunks]
-    
-    embeddings = model.encode(texts, show_progress_bar=True)
-    
+    embeddings = model.encode(texts, normalize_embeddings=True)
+
     return embeddings, chunks

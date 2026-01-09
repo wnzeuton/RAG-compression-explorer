@@ -1,6 +1,8 @@
 import streamlit as st
 import torch
 import time
+from pathlib import Path
+from collections import defaultdict
 
 from src.retrieval.retriever import Retriever
 from src.compression.soft import SoftCompressor
@@ -28,6 +30,20 @@ LOOSE_RAG_PROMPT = (
     "when relevant, but you may rely on your general knowledge if needed. "
     "Do not explicitly mention the context unless necessary."
 )
+
+# =====================================================
+# Load full documents
+# =====================================================
+RAW_DIR = Path("data/raw")
+
+@st.cache_data
+def load_full_documents():
+    docs = {}
+    for path in RAW_DIR.glob("*.txt"):
+        docs[path.name] = path.read_text()
+    return docs
+
+full_docs = load_full_documents()
 
 # =====================================================
 # Initialize modules
@@ -91,6 +107,27 @@ def query_qwen3(context, question, system_prompt, rag_mode):
 
     output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
     return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+
+# =====================================================
+# Highlight helper
+# =====================================================
+def highlight_chunks(doc_text, chunks):
+    highlighted = doc_text
+
+    # Sort backwards so offsets don't shift
+    chunks = sorted(chunks, key=lambda c: c["start_char"], reverse=True)
+
+    for c in chunks:
+        start, end = c["start_char"], c["end_char"]
+        snippet = highlighted[start:end]
+
+        highlighted = (
+            highlighted[:start]
+            + f"<mark style='background-color:#ffe066'>{snippet}</mark>"
+            + highlighted[end:]
+        )
+
+    return highlighted
 
 # =====================================================
 # UI Controls
@@ -199,13 +236,29 @@ if st.button("Generate"):
         st.write(answer)
 
         # =====================================================
-        # Show retrieved chunks
+        # Document-level attribution view
         # =====================================================
         if chunks:
-            st.subheader("Top Relevant Chunks")
-            for i, chunk in enumerate(chunks, start=1):
-                with st.expander(f"Chunk #{i}"):
-                    st.write(chunk["text"])
+            st.subheader("Retrieved Evidence in Full Documents")
+
+            chunks_by_doc = defaultdict(list)
+            for c in chunks:
+                chunks_by_doc[c["doc_name"]].append(c)
+
+            for doc_name, doc_chunks in chunks_by_doc.items():
+                with st.expander(f"📄 {doc_name}"):
+                    doc_text = full_docs.get(doc_name)
+
+                    if not doc_text:
+                        st.warning("Original document not found.")
+                        continue
+
+                    highlighted_doc = highlight_chunks(doc_text, doc_chunks)
+
+                    st.markdown(
+                        highlighted_doc,
+                        unsafe_allow_html=True
+                    )
 
         # =====================================================
         # Show compressed context
