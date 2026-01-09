@@ -4,10 +4,12 @@ from sentence_transformers import SentenceTransformer
 from src.retrieval.faiss_index import load_chunk_metadata
 from src.config import EMBEDDING_MODEL, TOP_K
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class Retriever:
     def __init__(self, top_k=TOP_K):
-        self.model = SentenceTransformer(EMBEDDING_MODEL)
+        self.model = SentenceTransformer(EMBEDDING_MODEL, device="cpu")
+        self.model.to(device)
         self.top_k = top_k
 
         # Load ALL chunk metadata (with embeddings stored)
