@@ -5,7 +5,6 @@ from pathlib import Path
 from collections import defaultdict
 
 from src.retrieval.retriever import Retriever
-from src.compression.soft import SoftCompressor
 from src.compression.hard import HardCompressor
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -49,7 +48,6 @@ full_docs = load_full_documents()
 # Initialize modules
 # =====================================================
 retriever = Retriever()
-soft_compressor = SoftCompressor()
 hard_compressor = HardCompressor()
 
 # =====================================================
@@ -135,19 +133,19 @@ rag_mode = st.selectbox(
     key="rag_mode_selectbox"
 )
 
-compression_type = st.selectbox(
-    "Compression method",
-    ["Soft (mean-pooled embeddings)", "Hard (summarize then embed)"],
-    key="compression_type_selectbox"
+use_compression = st.checkbox(
+    "Enable compression",
+    value=True,
+    key="use_compression_checkbox"
 )
 
-ratio = st.slider(
-    "Compression ratio",
+compression_level = st.slider(
+    "Compression level",
     min_value=0.1,
     max_value=1.0,
     value=1.0,
-    step=0.05,
-    key="compression_ratio_slider"
+    step=0.01,
+    key="compression_level_slider"
 )
 
 # =====================================================
@@ -196,10 +194,9 @@ if st.button("Generate", key="generate_button"):
         # -------------------------
         compressed = []
         if relevant_chunks:
-            if compression_type.startswith("Soft"):
-                compressed = soft_compressor.compress(relevant_chunks, ratio)
-            else:
-                compressed = hard_compressor.compress(relevant_chunks, ratio)
+            if use_compression:
+                compressed = hard_compressor.compress(relevant_chunks, compression_level)
+
 
         # -------------------------
         # Build context

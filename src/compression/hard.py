@@ -8,6 +8,7 @@ from sentence_transformers import SentenceTransformer
 from src.config import EMBEDDING_MODEL
 from src.compression.base import Compressor
 from src.compression.summarizer import summarize_local_safe
+from collections import defaultdict
 
 # Initialize once at module level to avoid re-init crashes
 # Force CPU to rule out Metal/MPS driver conflicts on Mac
@@ -18,32 +19,36 @@ class HardCompressor(Compressor):
         # Use the global model
         self.model = _MODEL
 
-    def compress(self, chunks, ratio=1.0):
+    def compress(self, chunks, level=1.0):
         if len(chunks) == 0:
             return []
 
-        n_chunks = len(chunks)
-        n_output = max(1, round(n_chunks * ratio))
-        group_size = n_chunks // n_output
+        # Group chunks by document title
+        chunks_by_doc = defaultdict(list)
+        for c in chunks:
+            doc_title = c.get("title", "unknown")
+            chunks_by_doc[doc_title].append(c)
+
         compressed = []
+        
+        # Calculate max_length based on level (inverse relationship)
+        # level 1.0 = max 500 tokens (least compression), level 0.1 = max 50 tokens (most compression)
+        max_length = int(50 + level * 450)
 
-        for i in range(n_output):
-            start = i * group_size
-            end = (i + 1) * group_size if i < n_output - 1 else n_chunks
-            group = chunks[start:end]
-
-            # Combine group text
-            combined_text = " ".join([c["text"] for c in group])
-
-            summary_text = summarize_local_safe(combined_text)
-            # summary_text = "Nights by Frank Ocean"
+        # Process each document separately
+        for doc_title, doc_chunks in chunks_by_doc.items():
+            # Combine all chunks from this document
+            combined_text = " ".join([c["text"] for c in doc_chunks])
+            
+            # Summarize the combined text
+            summary_text = summarize_local_safe(combined_text, max_length=max_length)
             
             # Embed the summary
             summary_emb = self.model.encode(summary_text)
-            # summary_emb = []
 
             compressed.append({
-                "doc_id": f"summary_{i}",
+                "doc_id": f"summary_{doc_title}",
+                "title": doc_title,
                 "text": summary_text,
                 "embedding": summary_emb
             })
