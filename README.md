@@ -44,7 +44,7 @@ It is designed to help explore how retrieval, compression, and grounding constra
 
 ## Hard Compression
 
-- Summarizes retrieved chunks using the **`sshleifer/distilbart-cnn-12-6`** model  
+- Summarizes retrieved chunks using the `sshleifer/distilbart-cnn-12-6` model  
 - Reduces context size → lower latency  
 - Higher compression may remove fine-grained details  
 - Only **compressed summaries** are sent to the LLM
