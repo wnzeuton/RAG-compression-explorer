@@ -63,8 +63,7 @@ It is designed to help explore how retrieval, compression, and grounding constra
 
 - Uses **Qwen3-0.6B**, a causal language model  
 - Generation is deterministic (`do_sample=False`) to reduce output variance  
-- Receives **only the context determined by retrieval and compression** (except in No RAG mode)
-
+- Enforces varying RAG modes via system prompting
 ---
 
 ## Limitations
