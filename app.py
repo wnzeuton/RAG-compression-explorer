@@ -14,8 +14,28 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 st.set_page_config(page_title="Context Compression Demo")
 st.title("Context Compression Demo")
 
+with st.expander("What is this demo?", expanded=True):
+    st.markdown("""
+This demo illustrates **Retrieval-Augmented Generation (RAG)** and **context compression** in a controlled setting.
+
+A user query retrieves relevant text chunks from a small document corpus.  
+These chunks may then be **compressed via hard compression** before being sent to a language model for answer generation.
+
+The goal is to observe how **compression level affects latency, faithfulness, and loss of detail** in RAG-based systems.
+""")
+
+with st.expander("About the document corpus"):
+    st.markdown("""
+The document corpus consists of **five synthetic, Wikipedia-style articles** describing **five fictional individuals**: Ilya Moreno, Mei-lin Zhao, Rafael Okoye, Anselma Kruger, and Thomas Albrecht..
+
+These articles were intentionally created to:
+- Avoid overlap with the model’s pretraining data
+- Ensure the LLM **must rely on retrieved context** to answer questions
+- Make the effects of RAG and compression more visible and interpretable
+""")
+
 # =====================================================
-# RAG system prompts
+# System prompts
 # =====================================================
 TIGHT_RAG_PROMPT = (
     "You are an assistant that answers questions ONLY using the provided context. "
@@ -30,6 +50,22 @@ LOOSE_RAG_PROMPT = (
     "Do not explicitly mention the context unless necessary."
 )
 
+NO_RAG_PROMPT = (
+    "You are a helpful assistant. Answer the user's question using your general knowledge."
+)
+
+# =====================================================
+# Helpers
+# =====================================================
+def get_default_system_prompt(rag_mode: str) -> str:
+    if rag_mode == "No RAG (LLM-only)":
+        return NO_RAG_PROMPT
+    elif rag_mode.startswith("Tight"):
+        return TIGHT_RAG_PROMPT
+    else:
+        return LOOSE_RAG_PROMPT
+
+
 # =====================================================
 # Load full documents
 # =====================================================
@@ -37,10 +73,7 @@ RAW_DIR = Path("data/raw")
 
 @st.cache_data
 def load_full_documents():
-    docs = {}
-    for path in RAW_DIR.glob("*.txt"):
-        docs[path.name] = path.read_text()
-    return docs
+    return {p.name: p.read_text() for p in RAW_DIR.glob("*.txt")}
 
 full_docs = load_full_documents()
 
@@ -67,14 +100,16 @@ def load_qwen3():
 tokenizer, model = load_qwen3()
 
 # =====================================================
-# LLM query function
+# LLM query
 # =====================================================
 def query_qwen3(context, question, system_prompt, rag_mode):
-    if rag_mode.startswith("Tight"):
+    if rag_mode == "No RAG (LLM-only)":
+        user_content = f"Question:\n{question}\n\nAnswer:"
+    elif rag_mode.startswith("Tight"):
         user_content = (
             f"Context:\n{context}\n\n"
             f"Question:\n{question}\n\n"
-            "Answer using ONLY the context:"
+            "Answer using the context:"
         )
     else:
         user_content = (
@@ -85,58 +120,47 @@ def query_qwen3(context, question, system_prompt, rag_mode):
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content}
+        {"role": "user", "content": user_content},
     ]
 
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
         add_generation_prompt=True,
-        enable_thinking=False
+        enable_thinking=False,
     )
 
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    outputs = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
 
-    generated_ids = model.generate(
-        **model_inputs,
-        max_new_tokens=1024,
-        do_sample=False
-    )
-
-    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):]
-    return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
-
-# =====================================================
-# Highlight helper
-# =====================================================
-def highlight_chunks(doc_text, chunks):
-    highlighted = doc_text
-    chunks = sorted(chunks, key=lambda c: c["start_char"], reverse=True)
-    for c in chunks:
-        start, end = c["start_char"], c["end_char"]
-        snippet = highlighted[start:end]
-        highlighted = (
-            highlighted[:start]
-            + f"<mark style='background-color:#ffe066'>{snippet}</mark>"
-            + highlighted[end:]
-        )
-    return highlighted
+    generated = outputs[0][len(inputs.input_ids[0]):]
+    return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 # =====================================================
 # UI Controls
 # =====================================================
-query = st.text_input("Enter your query", key="query_input")
+query = st.text_input("Enter your query")
 
 rag_mode = st.selectbox(
-    "RAG Mode",
-    ["Tight (context-only)", "Loose (context-guided)"],
-    key="rag_mode_selectbox"
+    "Generation Mode",
+    [
+        "No RAG (LLM-only)",
+        "Loose RAG (context-guided)",
+        "Tight RAG (context-only)",
+    ],
 )
 
-use_compression = st.checkbox(
-    "Enable compression",
-    value=True,
-    key="use_compression_checkbox"
+st.caption("""
+- **No RAG (LLM-only)**: Model uses only pretrained knowledge  
+- **Loose RAG**: Context is helpful but not binding  
+- **Tight RAG**: Model may answer *only* from retrieved context
+""")
+
+use_compression = st.checkbox("Enable compression", value=True)
+
+st.caption(
+    "**Hard compression** summarizes retrieved chunks using a separate encoder–decoder model. "
+    "Higher compression lowers latency but may remove fine-grained details."
 )
 
 compression_level = st.slider(
@@ -145,89 +169,84 @@ compression_level = st.slider(
     max_value=1.0,
     value=0.5,
     step=0.01,
-    key="compression_level_slider"
 )
+
+# =====================================================
+# System prompt state handling
+# =====================================================
+default_prompt = get_default_system_prompt(rag_mode)
+
+if "last_rag_mode" not in st.session_state:
+    st.session_state.last_rag_mode = rag_mode
+
+# Reset prompt when mode changes (unless overridden)
+if (
+    rag_mode != st.session_state.last_rag_mode
+    and not st.session_state.get("override_prompt", False)
+):
+    st.session_state.system_prompt_text = default_prompt
+
+st.session_state.last_rag_mode = rag_mode
 
 # =====================================================
 # Advanced settings
 # =====================================================
 with st.expander("Advanced settings"):
-    override_prompt = st.checkbox("Override system prompt", key="override_prompt_checkbox")
-
-    system_prompt = (
-        TIGHT_RAG_PROMPT
-        if rag_mode.startswith("Tight")
-        else LOOSE_RAG_PROMPT
-    )
-
-    custom_prompt = st.text_area(
-        "System prompt",
-        value=system_prompt,
-        height=150,
-        disabled=not override_prompt,
-        key="custom_system_prompt_textarea"
-    )
-
-    if override_prompt:
-        system_prompt = custom_prompt
-        st.warning("⚠️ Custom system prompt active")
-
-# =====================================================
-# Generate button
-# =====================================================
-if st.button("Generate", key="generate_button", use_container_width=True):
-    if not query:
-        st.warning("Please enter a query before generating.")
+    if rag_mode == "No RAG (LLM-only)":
+        st.info("System prompt is fixed in No-RAG mode.")
+        system_prompt = default_prompt
     else:
-        st.markdown("---")
+        override = st.checkbox("Override system prompt", key="override_prompt")
+        prompt_text = st.text_area(
+            "System prompt",
+            height=150,
+            key="system_prompt_text",
+            value=default_prompt,
+            disabled=not override,
+        )
+
+        system_prompt = prompt_text if override else default_prompt
+
+        if override:
+            st.warning("⚠️ Custom system prompt active")
+
+# =====================================================
+# Generate
+# =====================================================
+if st.button("Generate", use_container_width=True):
+    if not query:
+        st.warning("Please enter a query.")
+    else:
         start = time.time()
-        st.info("Running retrieval + compression + LLM...")
 
-        # -------------------------
-        # Retrieval (fixed top_k = 10)
-        # -------------------------
-        relevant_chunks = retriever.query(query)[:10]
+        if rag_mode == "No RAG (LLM-only)":
+            relevant_chunks = []
+            context_chunks = []
+        else:
+            relevant_chunks = retriever.query(query)[:10]
+            context_chunks = (
+                hard_compressor.compress(relevant_chunks, compression_level)
+                if use_compression
+                else relevant_chunks
+            )
 
-        # -------------------------
-        # Compression
-        # -------------------------
-        context_chunks = []
-        if relevant_chunks:
-            if use_compression:
-                context_chunks = hard_compressor.compress(relevant_chunks, compression_level)
-            else:
-                context_chunks = relevant_chunks
-            
+        context = "\n".join(c["text"] for c in context_chunks)
 
-
-        # -------------------------
-        # Build context
-        # -------------------------
-        context = "\n".join(c["text"] for c in context_chunks) if context_chunks else ""
-
-        # -------------------------
-        # LLM generation
-        # -------------------------
         answer = query_qwen3(
             context=context,
             question=query,
             system_prompt=system_prompt,
-            rag_mode=rag_mode
+            rag_mode=rag_mode,
         )
 
-        elapsed = round(time.time() - start, 2)
-        st.success(f"Done in {elapsed}s")
-
-        # =====================================================
-        # Output
-        # =====================================================
+        st.success(f"Done in {round(time.time() - start, 2)}s")
         st.subheader("LLM Output")
         st.write(answer)
 
         # =====================================================
-        # Document-level attribution view (updated)
+        # Retrieved evidence
         # =====================================================
-        if full_docs:
+        if rag_mode != "No RAG (LLM-only)" and full_docs:
             st.subheader("Retrieved Evidence in Full Documents")
 
             # Build relevant chunk mapping
