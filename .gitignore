@@ -1,3 +1,12 @@
+# Hugging Face caches
+.cache/
+huggingface/
+~/.cache/huggingface/
+models/
+*.bin
+*.safetensors
+*.pt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

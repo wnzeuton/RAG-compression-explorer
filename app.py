@@ -6,7 +6,8 @@ from collections import defaultdict
 
 from src.retrieval.retriever import Retriever
 from src.compression.hard import HardCompressor
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from sentence_transformers import SentenceTransformer
 
 # =====================================================
 # App setup
@@ -26,7 +27,7 @@ The goal is to observe how **compression level affects latency, faithfulness, an
 
 with st.expander("About the document corpus"):
     st.markdown("""
-The document corpus consists of **five synthetic, Wikipedia-style articles** describing **five fictional individuals**: Ilya Moreno, Mei-lin Zhao, Rafael Okoye, Anselma Kruger, and Thomas Albrecht..
+The document corpus consists of **five synthetic, Wikipedia-style articles** describing **five fictional individuals**: Ilya Moreno, Mei-lin Zhao, Rafael Okoye, Anselma Kruger, and Thomas Albrecht.
 
 These articles were intentionally created to:
 - Avoid overlap with the model’s pretraining data
@@ -65,9 +66,8 @@ def get_default_system_prompt(rag_mode: str) -> str:
     else:
         return LOOSE_RAG_PROMPT
 
-
 # =====================================================
-# Load full documents
+# Load full documents (still local, small files)
 # =====================================================
 RAW_DIR = Path("data/raw")
 
@@ -78,29 +78,45 @@ def load_full_documents():
 full_docs = load_full_documents()
 
 # =====================================================
-# Initialize modules
-# =====================================================
-retriever = Retriever()
-hard_compressor = HardCompressor()
-
-# =====================================================
-# Load Qwen3-0.6B
+# Initialize modules (retriever & compressor — assume small)
 # =====================================================
 @st.cache_resource
+def init_modules():
+    retriever = Retriever()
+    hard_compressor = HardCompressor()
+    return retriever, hard_compressor
+
+retriever, hard_compressor = init_modules()
+
+# =====================================================
+# Runtime model loading from Hugging Face
+# =====================================================
+@st.cache_resource(show_spinner="Loading Qwen3-0.6B from Hugging Face (may take 1–3 min on first run)...")
 def load_qwen3():
     model_name = "Qwen/Qwen3-0.6B"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        dtype="auto",
-        device_map="auto"
+        torch_dtype="auto",
+        device_map="auto",
+        trust_remote_code=True
     )
     return tokenizer, model
 
+@st.cache_resource(show_spinner="Loading DistilBART summarizer...")
+def load_bart():
+    return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+@st.cache_resource(show_spinner="Loading sentence-transformers embedder...")
+def load_embedder():
+    return SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+
 tokenizer, model = load_qwen3()
+bart_summarizer = load_bart()          
+embedder = load_embedder()             
 
 # =====================================================
-# LLM query
+# LLM query (unchanged except minor safety)
 # =====================================================
 def query_qwen3(context, question, system_prompt, rag_mode):
     if rag_mode == "No RAG (LLM-only)":
@@ -137,7 +153,7 @@ def query_qwen3(context, question, system_prompt, rag_mode):
     return tokenizer.decode(generated, skip_special_tokens=True).strip()
 
 # =====================================================
-# UI Controls
+# UI Controls (unchanged)
 # =====================================================
 query = st.text_input("Enter your query")
 
@@ -159,7 +175,7 @@ st.caption("""
 use_compression = st.checkbox("Enable compression", value=True)
 
 st.caption(
-    "**Hard compression** summarizes retrieved chunks using a separate encoder–decoder model. "
+    "**Hard compression** summarizes retrieved chunks using DistilBART. "
     "Higher compression lowers latency but may remove fine-grained details."
 )
 
@@ -172,14 +188,13 @@ compression_level = st.slider(
 )
 
 # =====================================================
-# System prompt state handling
+# System prompt handling (unchanged)
 # =====================================================
 default_prompt = get_default_system_prompt(rag_mode)
 
 if "last_rag_mode" not in st.session_state:
     st.session_state.last_rag_mode = rag_mode
 
-# Reset prompt when mode changes (unless overridden)
 if (
     rag_mode != st.session_state.last_rag_mode
     and not st.session_state.get("override_prompt", False)
@@ -188,9 +203,6 @@ if (
 
 st.session_state.last_rag_mode = rag_mode
 
-# =====================================================
-# Advanced settings
-# =====================================================
 with st.expander("Advanced settings"):
     if rag_mode == "No RAG (LLM-only)":
         st.info("System prompt is fixed in No-RAG mode.")
@@ -204,9 +216,7 @@ with st.expander("Advanced settings"):
             value=default_prompt,
             disabled=not override,
         )
-
         system_prompt = prompt_text if override else default_prompt
-
         if override:
             st.warning("⚠️ Custom system prompt active")
 
@@ -223,21 +233,23 @@ if st.button("Generate", use_container_width=True):
             relevant_chunks = []
             context_chunks = []
         else:
-            relevant_chunks = retriever.query(query)[:10]
-            context_chunks = (
-                hard_compressor.compress(relevant_chunks, compression_level)
-                if use_compression
-                else relevant_chunks
-            )
+            with st.spinner("Finding chunks relevant to query..."):
+                relevant_chunks = retriever.query(query)[:10]
+            with st.spinner("Compressing relevant chunks..."):
+                context_chunks = (
+                    hard_compressor.compress(relevant_chunks, compression_level)
+                    if use_compression
+                    else relevant_chunks
+                )
 
         context = "\n".join(c["text"] for c in context_chunks)
-
-        answer = query_qwen3(
-            context=context,
-            question=query,
-            system_prompt=system_prompt,
-            rag_mode=rag_mode,
-        )
+        with st.spinner("Generating output..."):
+            answer = query_qwen3(
+                context=context,
+                question=query,
+                system_prompt=system_prompt,
+                rag_mode=rag_mode,
+            )
 
         st.success(f"Done in {round(time.time() - start, 2)}s")
         st.subheader("LLM Output")
@@ -283,9 +295,6 @@ if st.button("Generate", use_container_width=True):
                         with st.expander(label):
                             st.markdown(f"<pre style='font-size:14px'>{c['text']}</pre>", unsafe_allow_html=True)
 
-        # =====================================================
-        # Show compressed context
-        # =====================================================
         if context_chunks:
             with st.expander(":orange[Context Sent to LLM]"):
                 for c_idx, c in enumerate(context_chunks):
